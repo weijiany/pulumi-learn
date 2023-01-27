@@ -1,3 +1,4 @@
+import './src/ecr';
 import * as aws from '@pulumi/aws';
 import { priSubnet, pubSubnet } from './src/subnet';
 import { assignOwner, concatName } from './src/utils';
