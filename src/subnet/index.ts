@@ -1,42 +1,44 @@
 import * as aws from '@pulumi/aws';
 import { Output } from '@pulumi/pulumi';
 import { assignOwner, concatName } from '../utils';
+import { cidrGen } from '../utils/cidr';
 
-
-const ec2Subnet = (vpcId: Output<string>, cidrBlock: string, name: string) => new aws.ec2.Subnet(name, {
+const ec2Subnet = (vpcId: Output<string>, cidrBlock: string, name: string, az: string) => new aws.ec2.Subnet(`${name}-${az}`, {
   vpcId,
   cidrBlock,
-  tags: assignOwner({ Name: concatName(name) }),
+  availabilityZone: az,
+  tags: assignOwner({ Name: concatName(`${name}-${az}`) }),
 });
 
-export const pubSubnet = (vpcId: Output<string>, cidrBlock: string) => {
-  let subnet = ec2Subnet(vpcId, cidrBlock, 'subnet-pub');
-
-  let igw = new aws.ec2.InternetGateway('igw', { vpcId, tags: assignOwner({ Name: concatName('igw') }) });
+export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cidrDigit: number) => {
+  let igw = new aws.ec2.InternetGateway('igw', { vpcId: vpc.id, tags: assignOwner({ Name: concatName('igw') }) });
 
   let pubToIgwRT = new aws.ec2.RouteTable('pub-to-igw', {
-    vpcId,
+    vpcId: vpc.id,
     routes: [{ cidrBlock: '0.0.0.0/0', gatewayId: igw.id }],
     tags: assignOwner({ Name: concatName('pub-to-igw') }),
   }, { dependsOn: [igw] });
 
-  new aws.ec2.RouteTableAssociation('subnet-pub-to-igw-route-table', {
-    subnetId: subnet.id,
-    routeTableId: pubToIgwRT.id,
-  }, { dependsOn: [subnet, pubToIgwRT] });
-};
+  let gen = cidrGen(cidr, cidrDigit);
 
-export const priSubnet = (vpcId: Output<string>, cidrBlock: string) => {
-  let subnet = ec2Subnet(vpcId, cidrBlock, 'subnet-pri');
+  azs.forEach(az => {
+    // public subnet
+    let pubSubnet = ec2Subnet(vpc.id, gen.next().value, 'subnet-pub', az);
+    new aws.ec2.RouteTableAssociation(`to-igw-route-table-for-pub-${az}`, {
+      subnetId: pubSubnet.id,
+      routeTableId: pubToIgwRT.id,
+    }, { dependsOn: [pubSubnet, pubToIgwRT] });
 
-  let eip = new aws.ec2.Eip('eip-for-nat', {
-    tags: assignOwner({ Name: concatName('eip-for-nat') }),
+    // private subnet
+    let priSubnet = ec2Subnet(vpc.id, gen.next().value, 'subnet-pri', az);
+    let eip = new aws.ec2.Eip(`eip-for-nat-${az}`, {
+      tags: assignOwner({ Name: concatName(`eip-for-nat-${az}`) }),
+    });
+    new aws.ec2.NatGateway(`nat-for-pri-${az}`, {
+      subnetId: priSubnet.id,
+      connectivityType: 'public',
+      allocationId: eip.allocationId,
+      tags: assignOwner({ Name: concatName(`nat-for-pri-${az}`) }),
+    }, { dependsOn: [eip, priSubnet] });
   });
-
-  new aws.ec2.NatGateway('nat-for-pri', {
-    subnetId: subnet.id,
-    connectivityType: 'public',
-    allocationId: eip.allocationId,
-    tags: assignOwner({ Name: concatName('nat') }),
-  }, { dependsOn: [eip, subnet] });
 };
