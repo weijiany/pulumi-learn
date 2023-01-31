@@ -10,6 +10,11 @@ const ec2Subnet = (vpcId: Output<string>, cidrBlock: string, name: string, az: s
   tags: assignOwner({ Name: concatName(`${name}-${az}`) }),
 });
 
+interface Subnets {
+  pubSubnets: aws.ec2.Subnet[];
+  priSubnets: aws.ec2.Subnet[];
+}
+
 export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cidrDigit: number) => {
   let igw = new aws.ec2.InternetGateway('igw', { vpcId: vpc.id, tags: assignOwner({ Name: concatName('igw') }) });
 
@@ -20,6 +25,11 @@ export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cid
   }, { dependsOn: [igw] });
 
   let gen = cidrGen(cidr, cidrDigit);
+
+  let result: Subnets = {
+    pubSubnets: [],
+    priSubnets: [],
+  };
 
   azs.forEach(az => {
     // public subnet
@@ -40,5 +50,10 @@ export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cid
       allocationId: eip.allocationId,
       tags: assignOwner({ Name: concatName(`nat-for-pri-${az}`) }),
     }, { dependsOn: [eip, priSubnet] });
+
+    result.pubSubnets.push(pubSubnet);
+    result.priSubnets.push(priSubnet);
   });
+
+  return result;
 };
