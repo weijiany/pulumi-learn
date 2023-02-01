@@ -44,12 +44,21 @@ export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cid
     let eip = new aws.ec2.Eip(`eip-for-nat-${az}`, {
       tags: assignOwner({ Name: concatName(`eip-for-nat-${az}`) }),
     });
-    new aws.ec2.NatGateway(`nat-for-pri-${az}`, {
+    let nat = new aws.ec2.NatGateway(`nat-for-pri-${az}`, {
       subnetId: priSubnet.id,
       connectivityType: 'public',
       allocationId: eip.allocationId,
       tags: assignOwner({ Name: concatName(`nat-for-pri-${az}`) }),
     }, { dependsOn: [eip, priSubnet] });
+    let priToNatRT = new aws.ec2.RouteTable(`pri-to-nat-${az}`, {
+      vpcId: vpc.id,
+      routes: [{ cidrBlock: '0.0.0.0/0', natGatewayId: nat.id }],
+      tags: assignOwner({ Name: concatName(`pri-to-nat-${az}`) }),
+    }, { dependsOn: [igw] });
+    new aws.ec2.RouteTableAssociation(`to-nat-route-table-for-pri-${az}`, {
+      subnetId: priSubnet.id,
+      routeTableId: priToNatRT.id,
+    }, { dependsOn: [nat, priToNatRT] });
 
     result.pubSubnets.push(pubSubnet);
     result.priSubnets.push(priSubnet);
