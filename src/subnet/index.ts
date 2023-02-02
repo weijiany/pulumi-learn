@@ -15,54 +15,57 @@ interface Subnets {
   priSubnets: aws.ec2.Subnet[];
 }
 
-export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cidrDigit: number) => {
-  let igw = new aws.ec2.InternetGateway('igw', { vpcId: vpc.id, tags: assignOwner({ Name: concatName('igw') }) });
+export const createSubnets = (vpc: aws.ec2.Vpc, azs: string[], cidr: string, cidrDigit: number): Subnets => {
+  let cidrGenerator = cidrGen(cidr, cidrDigit);
 
+  // igw for public subnet
+  let igw = new aws.ec2.InternetGateway('igw', { vpcId: vpc.id, tags: assignOwner({ Name: concatName('igw') }) });
   let pubToIgwRT = new aws.ec2.RouteTable('pub-to-igw', {
     vpcId: vpc.id,
     routes: [{ cidrBlock: '0.0.0.0/0', gatewayId: igw.id }],
     tags: assignOwner({ Name: concatName('pub-to-igw') }),
   }, { dependsOn: [igw] });
 
-  let gen = cidrGen(cidr, cidrDigit);
+  // public subnet
+  let pubSubnets = azs.map(az => {
+    let subnet = ec2Subnet(vpc.id, cidrGenerator.next().value, 'subnet-pub', az);
+    new aws.ec2.RouteTableAssociation(
+      `to-igw-rt-for-pub-${az}`,
+      {
+        subnetId: subnet.id,
+        routeTableId: pubToIgwRT.id,
+      }, { dependsOn: [subnet, pubToIgwRT] });
+    return subnet;
+  });
 
-  let result: Subnets = {
-    pubSubnets: [],
-    priSubnets: [],
-  };
+  // eip, nat for private subnet
+  let pubSubnet = pubSubnets[0];
+  let eip = new aws.ec2.Eip('eip-for-nat', {
+    tags: assignOwner({ Name: concatName('eip-for-nat') }),
+  });
+  let nat = new aws.ec2.NatGateway('nat-for-pri', {
+    subnetId: pubSubnet.id,
+    connectivityType: 'public',
+    allocationId: eip.allocationId,
+    tags: assignOwner({ Name: concatName('nat-for-pri') }),
+  }, { dependsOn: [eip, pubSubnet] });
 
-  azs.forEach(az => {
-    // public subnet
-    let pubSubnet = ec2Subnet(vpc.id, gen.next().value, 'subnet-pub', az);
-    new aws.ec2.RouteTableAssociation(`to-igw-route-table-for-pub-${az}`, {
-      subnetId: pubSubnet.id,
-      routeTableId: pubToIgwRT.id,
-    }, { dependsOn: [pubSubnet, pubToIgwRT] });
-
-    // private subnet
-    let priSubnet = ec2Subnet(vpc.id, gen.next().value, 'subnet-pri', az);
-    let eip = new aws.ec2.Eip(`eip-for-nat-${az}`, {
-      tags: assignOwner({ Name: concatName(`eip-for-nat-${az}`) }),
-    });
-    let nat = new aws.ec2.NatGateway(`nat-for-pri-${az}`, {
-      subnetId: priSubnet.id,
-      connectivityType: 'public',
-      allocationId: eip.allocationId,
-      tags: assignOwner({ Name: concatName(`nat-for-pri-${az}`) }),
-    }, { dependsOn: [eip, priSubnet] });
+  // private subnet
+  let priSubnets = azs.map(az => {
     let priToNatRT = new aws.ec2.RouteTable(`pri-to-nat-${az}`, {
       vpcId: vpc.id,
       routes: [{ cidrBlock: '0.0.0.0/0', natGatewayId: nat.id }],
       tags: assignOwner({ Name: concatName(`pri-to-nat-${az}`) }),
-    }, { dependsOn: [igw] });
-    new aws.ec2.RouteTableAssociation(`to-nat-route-table-for-pri-${az}`, {
-      subnetId: priSubnet.id,
-      routeTableId: priToNatRT.id,
-    }, { dependsOn: [nat, priToNatRT] });
-
-    result.pubSubnets.push(pubSubnet);
-    result.priSubnets.push(priSubnet);
+    }, { dependsOn: [nat] });
+    let subnet = ec2Subnet(vpc.id, cidrGenerator.next().value, 'subnet-pri', az);
+    new aws.ec2.RouteTableAssociation(
+      `to-nat-rt-for-pri-${az}`,
+      {
+        subnetId: subnet.id,
+        routeTableId: priToNatRT.id,
+      }, { dependsOn: [nat, priToNatRT] });
+    return subnet;
   });
 
-  return result;
+  return { pubSubnets, priSubnets };
 };
